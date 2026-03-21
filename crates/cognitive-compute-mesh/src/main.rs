@@ -1,32 +1,29 @@
-use axum::{routing::get, Json, Router};
-use serde_json::{json, Value};
-use tracing::info;
-
-async fn health() -> Json<Value> {
-    Json(json!({
-        "status": "ok",
-        "service": "cognitive-compute-mesh"
-    }))
-}
+use cognitive_compute_mesh::{
+    backends::mock::MockBackend,
+    routing::RoutingEngine,
+    api::routes::{AppState, create_router},
+};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("cognitive_compute_mesh=info".parse().unwrap()),
         )
         .init();
 
-    info!("Cognitive Compute Mesh server starting on port 8090");
+    let backends: Vec<Arc<dyn cognitive_compute_mesh::backends::InferenceBackend>> = vec![
+        Arc::new(MockBackend::new_local()),
+        Arc::new(MockBackend::new_cloud()),
+    ];
 
-    let app = Router::new().route("/health", get(health));
+    let engine = Arc::new(RoutingEngine::new(backends));
+    let state = Arc::new(AppState::new(engine));
+    let app = create_router(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8090")
-        .await
-        .expect("Failed to bind to port 8090");
-
-    axum::serve(listener, app)
-        .await
-        .expect("Server failed");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8090").await.unwrap();
+    tracing::info!("Cognitive Compute Mesh server starting on port 8090");
+    axum::serve(listener, app).await.unwrap();
 }
