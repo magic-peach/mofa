@@ -1836,6 +1836,7 @@ dependencies = [
  "dashmap 5.5.3",
  "futures",
  "futures-util",
+ "lru 0.12.5",
  "rand 0.8.5",
  "serde",
  "serde_json",
