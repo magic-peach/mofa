@@ -1,5 +1,11 @@
 use cognitive_compute_mesh::{
-    backends::mock::MockBackend,
+    backends::{
+        mock::MockBackend,
+        openai::OpenAIBackend,
+        anthropic::AnthropicBackend,
+        local::LocalBackend,
+        InferenceBackend,
+    },
     routing::RoutingEngine,
     api::routes::{AppState, create_router},
 };
@@ -14,9 +20,12 @@ async fn main() {
         )
         .init();
 
-    let backends: Vec<Arc<dyn cognitive_compute_mesh::backends::InferenceBackend>> = vec![
+    let backends: Vec<Arc<dyn InferenceBackend>> = vec![
         Arc::new(MockBackend::new_local()),
         Arc::new(MockBackend::new_cloud()),
+        Arc::new(OpenAIBackend::new()),
+        Arc::new(AnthropicBackend::new()),
+        Arc::new(LocalBackend::new()),
     ];
 
     let engine = Arc::new(RoutingEngine::new(backends));

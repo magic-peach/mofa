@@ -1838,6 +1838,7 @@ dependencies = [
  "futures-util",
  "lru 0.12.5",
  "rand 0.8.5",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

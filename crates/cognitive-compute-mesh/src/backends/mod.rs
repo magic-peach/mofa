@@ -27,3 +27,6 @@ pub trait InferenceBackend: Send + Sync {
 pub mod mock;
 pub mod health;
 pub mod metrics;
+pub mod openai;
+pub mod anthropic;
+pub mod local;
