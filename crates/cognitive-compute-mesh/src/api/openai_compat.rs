@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::protocol::{InferenceRequest, InferenceResponse, Message};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OpenAIChatRequest {
     pub model: String,
     pub messages: Vec<OpenAIMessage>,
@@ -13,7 +13,7 @@ pub struct OpenAIChatRequest {
     pub stream: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIMessage {
     pub role: String,
     pub content: String,
