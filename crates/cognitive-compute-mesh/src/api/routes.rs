@@ -10,17 +10,36 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use crate::routing::RoutingEngine;
 use crate::protocol::*;
+use crate::rag::{HybridRetriever, EmbeddingProvider, MockEmbeddings, EmbeddingCache};
+use crate::vector::memory::MemoryVectorStore;
+use crate::vector::store::VectorStore;
 use super::openai_compat::*;
+
+pub struct RagStore {
+    pub retriever: Arc<HybridRetriever>,
+    pub vector_store: Arc<MemoryVectorStore>,
+    pub stored: Arc<tokio::sync::RwLock<Vec<(String, Vec<f32>, Document)>>>,
+}
 
 pub struct AppState {
     pub engine: Arc<RoutingEngine>,
     pub event_tx: broadcast::Sender<MeshEvent>,
+    pub rag: Arc<RagStore>,
 }
 
 impl AppState {
     pub fn new(engine: Arc<RoutingEngine>) -> Self {
         let event_tx = engine.event_tx.clone();
-        Self { engine, event_tx }
+        let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddings::new(128));
+        let embedding_cache = Arc::new(EmbeddingCache::new(1000));
+        let retriever = Arc::new(HybridRetriever::new(embedding_provider, embedding_cache));
+        let vector_store = Arc::new(MemoryVectorStore::new());
+        let rag = Arc::new(RagStore {
+            retriever,
+            vector_store,
+            stored: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        });
+        Self { engine, event_tx, rag }
     }
 }
 
@@ -207,17 +226,65 @@ async fn simulate_routing(
 }
 
 async fn rag_query(
-    State(_state): State<Arc<AppState>>,
-    Json(_body): Json<Value>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<Value>,
 ) -> Json<Value> {
-    Json(json!({"results": [], "message": "RAG not yet configured"}))
+    let query = body.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let top_k = body.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+
+    if query.is_empty() {
+        return Json(json!({"results": [], "query": query, "error": "empty query"}));
+    }
+
+    let stored = state.rag.stored.read().await;
+    match state.rag.retriever.retrieve_with_vectors(&query, &stored, top_k, 0.7, 0.3).await {
+        Ok(results) => {
+            let items: Vec<Value> = results.into_iter().map(|r| json!({
+                "id": r.document.id,
+                "score": r.score,
+                "content": r.document.content,
+                "metadata": r.document.metadata,
+            })).collect();
+            Json(json!({"results": items, "query": query}))
+        }
+        Err(e) => Json(json!({"results": [], "query": query, "error": e.to_string()})),
+    }
 }
 
 async fn rag_ingest(
-    State(_state): State<Arc<AppState>>,
-    Json(_body): Json<Value>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<Value>,
 ) -> Json<Value> {
-    Json(json!({"ingested": 0, "message": "RAG not yet configured"}))
+    let docs_val = match body.get("documents").and_then(|v| v.as_array()) {
+        Some(arr) => arr.clone(),
+        None => return Json(json!({"ingested": 0, "error": "missing documents array"})),
+    };
+
+    let mut ingested = 0usize;
+    for doc_val in &docs_val {
+        let id = doc_val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let content = doc_val.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if id.is_empty() || content.is_empty() { continue; }
+
+        let metadata = doc_val.get("metadata")
+            .and_then(|v| v.as_object())
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+
+        let doc = Document { id: id.clone(), content, metadata };
+        match state.rag.retriever.add_document(doc.clone()).await {
+            Ok(embedding) => {
+                let payload = json!({"id": doc.id, "content": doc.content});
+                let _ = state.rag.vector_store.upsert(&id, embedding.clone(), payload).await;
+                state.rag.stored.write().await.push((id, embedding, doc));
+                ingested += 1;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    let total = state.rag.stored.read().await.len();
+    Json(json!({"ingested": ingested, "total": total}))
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {

@@ -1,1 +1,5 @@
-// Vector store — implemented in Task 8
+pub mod store;
+pub mod memory;
+
+pub use store::*;
+pub use memory::MemoryVectorStore;
